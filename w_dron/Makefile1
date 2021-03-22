@@ -1,0 +1,11 @@
+test : pm_i2c.o i2c.o
+	gcc -o test pm_i2c.o i2c.o
+
+pm_i2c.o : pm_i2c.c
+	gcc -c -o pm_i2c.o pm_i2c.c
+
+i2c.o : i2c.c
+	gcc -c -o i2c.o i2c.c
+
+clean : 
+	rm *.o test
