@@ -212,7 +212,7 @@ void ptz_gcs_thread() {     ///////////////////////////////////////////////// de
     }
 }
 
-void gcs_fc_thread(float *cmd1, float *cmd2) {
+void gcs_fc_thread(float *cmd1, float *cmd2, float *cmd3) {
 
     mavlink_message_t message;
     //mavlink_bec_t bec;
@@ -249,6 +249,7 @@ void gcs_fc_thread(float *cmd1, float *cmd2) {
                     {
                         *cmd1 = ptz.param1;
                         *cmd2 = ptz.param2;
+                        *cmd3 = ptz.param3;
                     }
                     //printf("cmd1 = %f       cmd2 = %f\n", ptz.param1, ptz.param2);
                     fc_port->write_message(message);  
@@ -688,7 +689,7 @@ void w_IO_port_thread(int *pipe_fd, int *pm_cmd) {       ///////////////////////
     }
 } 
 
-void ptz_thread(float *cmd1, float *cmd2, int *pm_cmd)      ////////////////////////////////
+void ptz_thread(float *cmd1, float *cmd2, float *cmd3, int *pm_cmd)      ////////////////////////////////
 {
     uint64_t ptz_stop    = 0xe11e00f11f;
     uint64_t cam_stop    = 0xe11e07f11f;
@@ -711,11 +712,12 @@ void ptz_thread(float *cmd1, float *cmd2, int *pm_cmd)      ////////////////////
 
     int _cmd1;
     float _cmd2;
+    float _cmd3;
 
     while(1)
     {   
         //_cmd data make 
-        if(_cmd1 == static_cast<int>(*cmd1) & _cmd2 == *cmd2) 
+        if(_cmd1 == static_cast<int>(*cmd1) & _cmd2 == *cmd2 & _cmd3 == *cmd3) 
         {
             usleep(1000);
             continue;
@@ -724,163 +726,249 @@ void ptz_thread(float *cmd1, float *cmd2, int *pm_cmd)      ////////////////////
         {
             _cmd1 = static_cast<int>(*cmd1);
             _cmd2 = *cmd2;
-            printf("cmd1 = %d   cmd2 = %f\n", _cmd1, _cmd2);  //get midas controll data
+            _cmd3 = *cmd3;
+            printf("cmd1 = %d   cmd2 = %f   cmd3 = %f\n", _cmd1, _cmd2, _cmd3);  //get midas controll data
         }
 
-        switch(_cmd1)
+        if(_cmd3 == 0)
         {
-            case 9:    //ptz /up, down
+            switch(_cmd1)
             {
-                if(_cmd2 == 1492)
+                case 9:    //ptz /up, down
                 {
-                    printf("ptz up down stop\n");
-                    ptz_port->write_ptz(&ptz_stop);
+                    if(_cmd2 == 1492)
+                    {
+                        printf("ptz up down stop\n");
+                        ptz_port->write_ptz(&ptz_stop);
+                    }
+                    else if(_cmd2 < 1492 & _cmd2 != 0) 
+                    {
+                        printf("ptz up\n");
+                        ptz_port->write_ptz(&up);
+                        //usleep(100000);
+                        //ptz_port->write_ptz(&ptz_stop);
+                    }
+                    else if(_cmd2 > 1492 & _cmd2 != 0) 
+                    {
+                        printf("ptz down\n");
+                        ptz_port->write_ptz(&down);
+                    }
+                    break;
                 }
-                else if(_cmd2 < 1492 & _cmd2 != 0) 
+                case 10:    //ptz /left, right 
                 {
-                    printf("ptz up\n");
-                    ptz_port->write_ptz(&up);
-                    //usleep(100000);
-                    //ptz_port->write_ptz(&ptz_stop);
+                    if(_cmd2 == 1492)
+                    {
+                        printf("ptz left right stop\n");
+                        ptz_port->write_ptz(&ptz_stop);
+                    }
+                    else if(_cmd2 < 1492 & _cmd2 != 0) 
+                    {
+                        printf("lefte\n");
+                        ptz_port->write_ptz(&left);
+                    }
+                    else if(_cmd2 > 1492 & _cmd2 != 0) 
+                    {
+                        printf("right\n");
+                        ptz_port->write_ptz(&right);
+                    }
+                    break;
                 }
-                else if(_cmd2 > 1492 & _cmd2 != 0) 
+                case 11:    //ptz zoom /in, out
                 {
-                    printf("ptz down\n");
-                    ptz_port->write_ptz(&down);
+                    if(_cmd2 == 1492)
+                    {
+                        printf("ptz zoom in out stop\n");
+                        ptz_port->write_ptz(&cam_stop);
+                    }
+                    else if(_cmd2 < 1492 & _cmd2 != 0)
+                    {
+                        printf("zoom in\n");
+                        ptz_port->write_ptz(&cam_in);
+                    }
+                    else if(_cmd2 > 1492 & _cmd2 != 0)
+                    {
+                        printf("zoom out\n");
+                        ptz_port->write_ptz(&cam_out);
+                    }
+                    break;
                 }
-                break;
+                case 21:    //camera power /on, off  ///////////////////////////bec controll
+                {
+                    if(_cmd2 == 11) // on
+                    {
+                        *pm_cmd = 1;
+                    }
+                    else if(_cmd2 == 10) // off
+                    {
+                        *pm_cmd = 2;
+                    }
+                    break;
+                }
+                case 22:    //camera screen /on, off
+                {
+                    if(_cmd2 == 11)
+                    {
+                        printf("cam screen on\n");
+                        ptz_port->write_ptz(&power_on);
+                    }
+                    else if(_cmd2 == 10)
+                    {
+                        printf("cam screen off\n");
+                        ptz_port->write_ptz(&power_off);
+                    }
+                    break;
+                }
+                case 23:    //set position init
+                {
+                    if(_cmd2 == 11)
+                    {
+                        printf("ptz set position init\n");
+                        ptz_port->write_ptz(&cam_reset);
+                    }
+                    break;
+                }
+                case 24:    //tracking /on, off, cross
+                {
+                    if(_cmd2 == 11)
+                    {
+                        printf("tk on\n");
+                        ptz_port->write_ptz(&tk_on);
+                    }
+                    else if(_cmd2 == 10)
+                    {
+                        printf("tk off\n");
+                        ptz_port->write_ptz(&tk_off);
+                    }
+                    else if(_cmd2 == 12)
+                    {
+                        printf("tk cross\n");
+                        ptz_port->write_ptz(&tk_cross);
+                    }
+                    break;
+                }
+                case 25:    //screen /optical, ir, ir'optical, optical'ir
+                {
+                    if(_cmd2 == 11)
+                    {
+                        printf("optical (IR)\n");
+                        ptz_port->write_ptz(&op_ir);
+                    }
+                    else if(_cmd2 == 12)
+                    {
+                        printf("IR (optical)\n");
+                        ptz_port->write_ptz(&ir_op);
+                    }
+                    else if(_cmd2 == 13)
+                    {
+                        printf("optical\n");
+                        ptz_port->write_ptz(&op);
+                    }
+                    else if(_cmd2 == 14)
+                    {
+                        printf("IR\n");
+                        ptz_port->write_ptz(&ir);
+                    }
+                    break;
+                }
+                case 26:    //LED /on, off    ////////////////////////////////bec controll
+                {
+                    if(_cmd2 == 11)  //on
+                    {
+                        *pm_cmd = 3;
+                    }
+                    else if(_cmd2 == 10) //off
+                    {
+                        *pm_cmd = 4;
+                    }
+                    break;
+                }
+                default:
+                {
+                    break;
+                }
             }
-            case 10:    //ptz /left, right 
+        }
+        else  //ptz control new MiDas version
+        {
+            switch(_cmd1)
             {
-                if(_cmd2 == 1492)
+                case 9:    //new midas ptz /up, down
                 {
-                    printf("ptz left right stop\n");
-                    ptz_port->write_ptz(&ptz_stop);
+                    if(_cmd2 < 1492 & _cmd2 != 0) 
+                    {
+                        printf("__up\n");
+                        ptz_port->write_ptz(&up);
+                        
+                        usleep(_cmd3*1000);
+
+                        printf("__stop\n");
+                        ptz_port->write_ptz(&ptz_stop);
+                    }
+                    else if(_cmd2 > 1492 & _cmd2 != 0) 
+                    {
+                        printf("__down\n");
+                        ptz_port->write_ptz(&down);
+                        
+                        usleep(_cmd3*1000);
+                        
+                        printf("__stop\n");
+                        ptz_port->write_ptz(&ptz_stop);
+                    }
+                    break;
                 }
-                else if(_cmd2 < 1492 & _cmd2 != 0) 
+                case 10:    //new midas ptz /left, right 
                 {
-                    printf("lefte\n");
-                    ptz_port->write_ptz(&left);
+                    if(_cmd2 < 1492 & _cmd2 != 0) 
+                    {
+                        printf("__lefte\n");
+                        ptz_port->write_ptz(&left);
+
+                        usleep(_cmd3*1000);
+
+                        printf("__stop\n");
+                        ptz_port->write_ptz(&ptz_stop);
+                    }
+                    else if(_cmd2 > 1492 & _cmd2 != 0) 
+                    {
+                        printf("__right\n");
+                        ptz_port->write_ptz(&right);
+
+                        usleep(_cmd3*1000);
+
+                        printf("__stop\n");
+                        ptz_port->write_ptz(&ptz_stop);
+                    }
+                    break;
                 }
-                else if(_cmd2 > 1492 & _cmd2 != 0) 
+                case 11:    //new midas ptz zoom /in, out
                 {
-                    printf("right\n");
-                    ptz_port->write_ptz(&right);
+                    if(_cmd2 < 1492 & _cmd2 != 0)
+                    {
+                        printf("__zoom in\n");
+                        ptz_port->write_ptz(&cam_in);
+
+                        usleep(_cmd3*1000);
+
+                        printf("__zoom stop\n");
+                        ptz_port->write_ptz(&cam_stop);
+                    }
+                    else if(_cmd2 > 1492 & _cmd2 != 0)
+                    {
+                        printf("__zoom out\n");
+                        ptz_port->write_ptz(&cam_out);
+
+                        usleep(_cmd3*1000);
+
+                        printf("__zoom stop\n");
+                        ptz_port->write_ptz(&cam_stop);
+                    }
+                    break;
                 }
-                break;
-            }
-            case 11:    //ptz zoom /in, out
-            {
-                if(_cmd2 == 1492)
+                default:
                 {
-                    printf("ptz zoom in out stop\n");
-                    ptz_port->write_ptz(&cam_stop);
+                    break;
                 }
-                else if(_cmd2 < 1492 & _cmd2 != 0)
-                {
-                    printf("zoom in\n");
-                    ptz_port->write_ptz(&cam_in);
-                }
-                else if(_cmd2 > 1492 & _cmd2 != 0)
-                {
-                    printf("zoom out\n");
-                    ptz_port->write_ptz(&cam_out);
-                }
-                break;
-            }
-            case 21:    //camera power /on, off  ///////////////////////////bec controll
-            {
-                if(_cmd2 == 11) // on
-                {
-                    *pm_cmd = 1;
-                }
-                else if(_cmd2 == 10) // off
-                {
-                    *pm_cmd = 2;
-                }
-                break;
-            }
-            case 22:    //camera screen /on, off
-            {
-                if(_cmd2 == 11)
-                {
-                    printf("cam screen on\n");
-                    ptz_port->write_ptz(&power_on);
-                }
-                else if(_cmd2 == 10)
-                {
-                    printf("cam screen off\n");
-                    ptz_port->write_ptz(&power_off);
-                }
-                break;
-            }
-            case 23:    //set position init
-            {
-                if(_cmd2 == 11)
-                {
-                    printf("ptz set position init\n");
-                    ptz_port->write_ptz(&cam_reset);
-                }
-                break;
-            }
-            case 24:    //tracking /on, off, cross
-            {
-                if(_cmd2 == 11)
-                {
-                    printf("tk on\n");
-                    ptz_port->write_ptz(&tk_on);
-                }
-                else if(_cmd2 == 10)
-                {
-                    printf("tk off\n");
-                    ptz_port->write_ptz(&tk_off);
-                }
-                else if(_cmd2 == 12)
-                {
-                    printf("tk cross\n");
-                    ptz_port->write_ptz(&tk_cross);
-                }
-                break;
-            }
-            case 25:    //screen /optical, ir, ir'optical, optical'ir
-            {
-                if(_cmd2 == 11)
-                {
-                    printf("optical (IR)\n");
-                    ptz_port->write_ptz(&op_ir);
-                }
-                else if(_cmd2 == 12)
-                {
-                    printf("IR (optical)\n");
-                    ptz_port->write_ptz(&ir_op);
-                }
-                else if(_cmd2 == 13)
-                {
-                    printf("optical\n");
-                    ptz_port->write_ptz(&op);
-                }
-                else if(_cmd2 == 14)
-                {
-                    printf("IR\n");
-                    ptz_port->write_ptz(&ir);
-                }
-                break;
-            }
-            case 26:    //LED /on, off    ////////////////////////////////bec controll
-            {
-                if(_cmd2 == 11)  //on
-                {
-                    *pm_cmd = 3;
-                }
-                else if(_cmd2 == 10) //off
-                {
-                    *pm_cmd = 4;
-                }
-                break;
-            }
-            default:
-            {
-                break;
             }
         }
     }
@@ -1280,12 +1368,13 @@ int main(void)
             fprintf(stderr,"open_w_drone_rx_20210107\n");
             float cmd1 = 0.0;           //ptz controll
             float cmd2 = 0.0;
+            float cmd3 = 0.0;
             int pm_cmd = 0;             //pm controll
 
             //thread start
-            std::thread th6(&gcs_fc_thread, &cmd1, &cmd2);
+            std::thread th6(&gcs_fc_thread, &cmd1, &cmd2, &cmd3);
             std::thread th11(&w_IO_port_thread, pipe_fd, &pm_cmd);     ////////////////// SSR active
-            std::thread th8(&ptz_thread, &cmd1, &cmd2, &pm_cmd);
+            std::thread th8(&ptz_thread, &cmd1, &cmd2, &cmd3, &pm_cmd);
             //std::thread th10(&pz10t_thread, &cmd1, &cmd2, &pm_cmd);
 
             th6.join();
