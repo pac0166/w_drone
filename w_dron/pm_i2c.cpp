@@ -212,7 +212,7 @@ void ptz_gcs_thread() {     ///////////////////////////////////////////////// de
     }
 }
 
-void gcs_fc_thread(float *cmd1, float *cmd2) {
+void gcs_fc_thread(float *cmd1, float *cmd2, float *cmd3) {
 
     mavlink_message_t message;
     //mavlink_bec_t bec;
@@ -249,6 +249,7 @@ void gcs_fc_thread(float *cmd1, float *cmd2) {
                     {
                         *cmd1 = ptz.param1;
                         *cmd2 = ptz.param2;
+                        *cmd3 = ptz.param3;
                     }
                     //printf("cmd1 = %f       cmd2 = %f\n", ptz.param1, ptz.param2);
                     fc_port->write_message(message);  
@@ -292,22 +293,27 @@ void bec_thread(int *pipe_fd, uint16_t *pack_v) {
     i2c_read(&bp, 0x64, buffer, size);
     write_i2c_byte_data(bp.bus, 0x01, 0xfc);
     usleep(16000);
+        
+    int cmd_a = 1; //pm on == ssr on
+    int cmd_b = 0; // if don't send / recv part stop
+    bool ssr = false;
+
+    unsigned char bp_buffer[24]; // v, a, temp data buffer
+    ssize_t bp_size = sizeof(bp_buffer); //buffer size
 
     // //logggggggggggggggg
     // std::string date = currentDateTime();        //get time 
     // std::ofstream out1(("./log/PACK_" + date + ".txt").c_str(), std::ios::app);  //make log file 
-        
+
     while(1)
     {
         for(int i=0; i<=40; i++)
         {
             // 1 get main buffer
-            unsigned char bp_buffer[24];
-            ssize_t bp_size = sizeof(bp_buffer);
-            memset(bp_buffer, 0, sizeof(bp_buffer));
-            if ((i2c_read(&bp, 0x64, bp_buffer, bp_size)) != bp_size) {
+            memset(bp_buffer, 0, sizeof(bp_buffer)); //buffer init
+            if ((i2c_read(&bp, 0x64, bp_buffer, bp_size)) != bp_size) //read buffer
+            {
                 fprintf(stderr, "BEC/Pack read error\n");
-                //exit(0);
             }
 
             //bp volt
@@ -316,23 +322,24 @@ void bec_thread(int *pipe_fd, uint16_t *pack_v) {
             float bp_volt_hex_data = (bp_volt_msb << 8) | bp_volt_lsb;
             float bp_volt = 70.8*(bp_volt_hex_data/65535); 
             
-            *pack_v = static_cast<int>(bp_volt*1000);  
-            //printf("%d\n", *pack_v);
-            
             //ssr on,off command(use pipe send other process) ////////////////////////////////////////////
-            if(bp_volt < 46) {
-                int cmd = 1; //pm on == ssr on
-                int a = write(pipe_fd[1], &cmd, sizeof(cmd));
+            if((bp_volt >0) && (bp_volt < 44)) 
+            {
+                write(pipe_fd[1], &cmd_a, sizeof(cmd_a));
+                ssr = true;
             }
             // else if(bp_volt > 30) {
             //     int cmd = 2; //pm off == ssr off
             //     int a = write(pipe_fd[1], &cmd, sizeof(cmd));
             // }
-            else {
-                int cmd = 0; // if don't send / recv part stop
-                int a = write(pipe_fd[1], &cmd, sizeof(cmd));
+            else 
+            {
+                write(pipe_fd[1], &cmd_b, sizeof(cmd_b));
             }
             //ssr on,off command(use pipe send other process) ////////////////////////////////////////////
+
+            *pack_v = static_cast<int>(bp_volt*1000);  
+            //printf("%d\n", *pack_v);
 
             //ampere
             unsigned char bp_ampere_msb = bp_buffer[14];
@@ -352,11 +359,12 @@ void bec_thread(int *pipe_fd, uint16_t *pack_v) {
 
             //printf("%f   %f   %f\n", bp_volt, bp_ampere, bp_temp);
             
-            /*if(i==40)
+            if((i==40) && (ssr==true))
             {
+                printf("ssr active\n"); 
                 //send to kcmvp LTC2944 data
-                mavlink_msg_battery_pack_pack_chan(1, 200 , 1,&message, bp_volt, bp_ampere, bp_temp);
-                kcmvp_port->write_message(message);
+                //mavlink_msg_battery_pack_pack_chan(1, 200 , 1,&message, bp_volt, bp_ampere, bp_temp);
+                //kcmvp_port->write_message(message);
                 
                 //mavlink_msg_sys_status_pack_chan(1, 200, 1, &message,0,0,0,0,test_volt,0,0,0,0,0,0,0,0);
                 //kcmvp_port->write_message(message);
@@ -367,7 +375,7 @@ void bec_thread(int *pipe_fd, uint16_t *pack_v) {
                 // out1.setf(ios::fixed); 
                 // out1.precision(2);
                 // if (out1.is_open()) out1 << adate <<" "<<" volt "<<bp_volt<<" current "<<bp_ampere<<" temp "<<bp_temp<<std::endl;
-            }*/
+            }
         }
     }
 }
@@ -391,11 +399,12 @@ void pack_thread() {
     // std::string date = currentDateTime();        //get time 
     // std::ofstream out1(("./log/BEC_" + date + ".txt").c_str(), std::ios::app);  //make log file 
 
+    //INA219 data 
+    ina219_data data;
+
     while(1)
     {
-        //INA219 data 
-        ina219_data data;
-        data = get_ina219_data(fd_40, 0x40);
+        //data = get_ina219_data(fd_40, 0x40);
         //mavlink_msg_bec_pack_chan(1, 200, 2, &message, 0, 0x40, data.volt, data.power, data.current);
         //kcmvp_port->write_message(message);
         //printf("bec_dataa\n");
@@ -406,47 +415,48 @@ void pack_thread() {
         // out1.precision(2);
         // if (out1.is_open()) out1 << adate <<" "<<" addr=01(40) "<<" Volt "<<data.volt<<" Current "<<data.current<<" Power "<<data.power<<std::endl;
 
-        data = get_ina219_data(fd_4e, 0x4e);
+        //data = get_ina219_data(fd_4e, 0x4e);
         //mavlink_msg_bec_pack_chan(1, 200, 2, &message, 0, 0x4e, data.volt, data.power, data.current);
         //kcmvp_port->write_message(message);
         //if (out1.is_open()) out1 << adate <<" "<<" addr=02(4e) "<<" Volt "<<data.volt<<" Current "<<data.current<<" Power "<<data.power<<std::endl;
         //printf("v=%f  p=%f  a=%f\n", data.volt, data.power, data.current);
-        data = get_ina219_data(fd_47, 0x47);
+        //data = get_ina219_data(fd_47, 0x47);
         //mavlink_msg_bec_pack_chan(1, 200, 2, &message, 0, 0x47, data.volt, data.power, data.current);
         //kcmvp_port->write_message(message);
         //if (out1.is_open()) out1 << adate <<" "<<" addr=03(47) "<<" Volt "<<data.volt<<" Current "<<data.current<<" Power "<<data.power<<std::endl;
         //printf("v=%f  p=%f  a=%f\n", data.volt, data.power, data.current);
-        data = get_ina219_data(fd_4d, 0x4d);
+        //data = get_ina219_data(fd_4d, 0x4d);
         //mavlink_msg_bec_pack_chan(1, 200, 2, &message, 0, 0x4d, data.volt, data.power, data.current);
         //kcmvp_port->write_message(message);
         //if (out1.is_open()) out1 << adate <<" "<<" addr=04(4d) "<<" Volt "<<data.volt<<" Current "<<data.current<<" Power "<<data.power<<std::endl;
         //printf("v=%f  p=%f  a=%f\n", data.volt, data.power, data.current);
-        data = get_ina219_data(fd_4c, 0x4c);
+        //data = get_ina219_data(fd_4c, 0x4c);
         //mavlink_msg_bec_pack_chan(1, 200, 2, &message, 0, 0x4c, data.volt, data.power, data.current);
         //kcmvp_port->write_message(message);
         //if (out1.is_open()) out1 << adate <<" "<<" addr=05(4c) "<<" Volt "<<data.volt<<" Current "<<data.current<<" Power "<<data.power<<std::endl;
         //printf("v=%f  p=%f  a=%f\n", data.volt, data.power, data.current);
-        data = get_ina219_data(fd_46, 0x46);
+        data = get_ina219_data(fd_46, 0x46); // SSR
+        printf("ssrV = %f\n", data.volt);
         //mavlink_msg_bec_pack_chan(1, 200, 2, &message, 0, 0x46, data.volt, data.power, data.current);
         //kcmvp_port->write_message(message);
         //if (out1.is_open()) out1 << adate <<" "<<" addr=06(46) "<<" Volt "<<data.volt<<" Current "<<data.current<<" Power "<<data.power<<std::endl;
         //printf("v=%f  p=%f  a=%f\n", data.volt, data.power, data.current);
-        data = get_ina219_data(fd_44, 0x44);
+        //data = get_ina219_data(fd_44, 0x44);
         //mavlink_msg_bec_pack_chan(1, 200, 2, &message, 0, 0x44, data.volt, data.power, data.current);
         //kcmvp_port->write_message(message);
         //if (out1.is_open()) out1 << adate <<" "<<" addr=07(44) "<<" Volt "<<data.volt<<" Current "<<data.current<<" Power "<<data.power<<std::endl;
         //printf("v=%f  p=%f  a=%f\n", data.volt, data.power, data.current);
-        data = get_ina219_data(fd_43, 0x43);
+        //data = get_ina219_data(fd_43, 0x43);
         //mavlink_msg_bec_pack_chan(1, 200, 2, &message, 0, 0x43, data.volt, data.power, data.current);
         //kcmvp_port->write_message(message);
         //if (out1.is_open()) out1 << adate <<" "<<" addr=08(43) "<<" Volt "<<data.volt<<" Current "<<data.current<<" Power "<<data.power<<std::endl;
         //printf("v=%f  p=%f  a=%f\n", data.volt, data.power, data.current);
-        data = get_ina219_data(fd_45, 0x45);
+        //data = get_ina219_data(fd_45, 0x45);
         //mavlink_msg_bec_pack_chan(1, 200, 2, &message, 0, 0x45, data.volt, data.power, data.current);
         //kcmvp_port->write_message(message);
         //if (out1.is_open()) out1 << adate <<" "<<" addr=09(45) "<<" Volt "<<data.volt<<" Current "<<data.current<<" Power "<<data.power<<std::endl;
         //printf("v=%f  p=%f  a=%f\n", data.volt, data.power, data.current);
-        data = get_ina219_data(fd_42, 0x42);
+        //data = get_ina219_data(fd_42, 0x42);
         //mavlink_msg_bec_pack_chan(1, 200, 2, &message, 0, 0x42, data.volt, data.power, data.current);
         //kcmvp_port->write_message(message);
         //if (out1.is_open()) out1 << adate <<" "<<" addr=10(42) "<<" Volt "<<data.volt<<" Current "<<data.current<<" Power "<<data.power<<std::endl<<std::endl;
@@ -688,7 +698,7 @@ void w_IO_port_thread(int *pipe_fd, int *pm_cmd) {       ///////////////////////
     }
 } 
 
-void ptz_thread(float *cmd1, float *cmd2, int *pm_cmd)      ////////////////////////////////
+void ptz_thread(float *cmd1, float *cmd2, float *cmd3, int *pm_cmd)      ////////////////////////////////
 {
     uint64_t ptz_stop    = 0xe11e00f11f;
     uint64_t cam_stop    = 0xe11e07f11f;
@@ -711,11 +721,12 @@ void ptz_thread(float *cmd1, float *cmd2, int *pm_cmd)      ////////////////////
 
     int _cmd1;
     float _cmd2;
+    float _cmd3;
 
     while(1)
     {   
         //_cmd data make 
-        if(_cmd1 == static_cast<int>(*cmd1) & _cmd2 == *cmd2) 
+        if(_cmd1 == static_cast<int>(*cmd1) & _cmd2 == *cmd2 & _cmd3 == *cmd3) 
         {
             usleep(1000);
             continue;
@@ -724,163 +735,249 @@ void ptz_thread(float *cmd1, float *cmd2, int *pm_cmd)      ////////////////////
         {
             _cmd1 = static_cast<int>(*cmd1);
             _cmd2 = *cmd2;
-            printf("cmd1 = %d   cmd2 = %f\n", _cmd1, _cmd2);  //get midas controll data
+            _cmd3 = *cmd3;
+            printf("cmd1 = %d   cmd2 = %f   cmd3 = %f\n", _cmd1, _cmd2, _cmd3);  //get midas controll data
         }
 
-        switch(_cmd1)
+        if(_cmd3 == 0)
         {
-            case 9:    //ptz /up, down
+            switch(_cmd1)
             {
-                if(_cmd2 == 1492)
+                case 9:    //ptz /up, down
                 {
-                    printf("ptz up down stop\n");
-                    ptz_port->write_ptz(&ptz_stop);
+                    if(_cmd2 == 1492)
+                    {
+                        printf("ptz up down stop\n");
+                        ptz_port->write_ptz(&ptz_stop);
+                    }
+                    else if(_cmd2 < 1492 & _cmd2 != 0) 
+                    {
+                        printf("ptz up\n");
+                        ptz_port->write_ptz(&up);
+                        //usleep(100000);
+                        //ptz_port->write_ptz(&ptz_stop);
+                    }
+                    else if(_cmd2 > 1492 & _cmd2 != 0) 
+                    {
+                        printf("ptz down\n");
+                        ptz_port->write_ptz(&down);
+                    }
+                    break;
                 }
-                else if(_cmd2 < 1492 & _cmd2 != 0) 
+                case 10:    //ptz /left, right 
                 {
-                    printf("ptz up\n");
-                    ptz_port->write_ptz(&up);
-                    //usleep(100000);
-                    //ptz_port->write_ptz(&ptz_stop);
+                    if(_cmd2 == 1492)
+                    {
+                        printf("ptz left right stop\n");
+                        ptz_port->write_ptz(&ptz_stop);
+                    }
+                    else if(_cmd2 < 1492 & _cmd2 != 0) 
+                    {
+                        printf("lefte\n");
+                        ptz_port->write_ptz(&left);
+                    }
+                    else if(_cmd2 > 1492 & _cmd2 != 0) 
+                    {
+                        printf("right\n");
+                        ptz_port->write_ptz(&right);
+                    }
+                    break;
                 }
-                else if(_cmd2 > 1492 & _cmd2 != 0) 
+                case 11:    //ptz zoom /in, out
                 {
-                    printf("ptz down\n");
-                    ptz_port->write_ptz(&down);
+                    if(_cmd2 == 1492)
+                    {
+                        printf("ptz zoom in out stop\n");
+                        ptz_port->write_ptz(&cam_stop);
+                    }
+                    else if(_cmd2 < 1492 & _cmd2 != 0)
+                    {
+                        printf("zoom in\n");
+                        ptz_port->write_ptz(&cam_in);
+                    }
+                    else if(_cmd2 > 1492 & _cmd2 != 0)
+                    {
+                        printf("zoom out\n");
+                        ptz_port->write_ptz(&cam_out);
+                    }
+                    break;
                 }
-                break;
+                case 21:    //camera power /on, off  ///////////////////////////bec controll
+                {
+                    if(_cmd2 == 11) // on
+                    {
+                        *pm_cmd = 1;
+                    }
+                    else if(_cmd2 == 10) // off
+                    {
+                        *pm_cmd = 2;
+                    }
+                    break;
+                }
+                case 22:    //camera screen /on, off
+                {
+                    if(_cmd2 == 11)
+                    {
+                        printf("cam screen on\n");
+                        ptz_port->write_ptz(&power_on);
+                    }
+                    else if(_cmd2 == 10)
+                    {
+                        printf("cam screen off\n");
+                        ptz_port->write_ptz(&power_off);
+                    }
+                    break;
+                }
+                case 23:    //set position init
+                {
+                    if(_cmd2 == 11)
+                    {
+                        printf("ptz set position init\n");
+                        ptz_port->write_ptz(&cam_reset);
+                    }
+                    break;
+                }
+                case 24:    //tracking /on, off, cross
+                {
+                    if(_cmd2 == 11)
+                    {
+                        printf("tk on\n");
+                        ptz_port->write_ptz(&tk_on);
+                    }
+                    else if(_cmd2 == 10)
+                    {
+                        printf("tk off\n");
+                        ptz_port->write_ptz(&tk_off);
+                    }
+                    else if(_cmd2 == 12)
+                    {
+                        printf("tk cross\n");
+                        ptz_port->write_ptz(&tk_cross);
+                    }
+                    break;
+                }
+                case 25:    //screen /optical, ir, ir'optical, optical'ir
+                {
+                    if(_cmd2 == 11)
+                    {
+                        printf("optical (IR)\n");
+                        ptz_port->write_ptz(&op_ir);
+                    }
+                    else if(_cmd2 == 12)
+                    {
+                        printf("IR (optical)\n");
+                        ptz_port->write_ptz(&ir_op);
+                    }
+                    else if(_cmd2 == 13)
+                    {
+                        printf("optical\n");
+                        ptz_port->write_ptz(&op);
+                    }
+                    else if(_cmd2 == 14)
+                    {
+                        printf("IR\n");
+                        ptz_port->write_ptz(&ir);
+                    }
+                    break;
+                }
+                case 26:    //LED /on, off    ////////////////////////////////bec controll
+                {
+                    if(_cmd2 == 11)  //on
+                    {
+                        *pm_cmd = 3;
+                    }
+                    else if(_cmd2 == 10) //off
+                    {
+                        *pm_cmd = 4;
+                    }
+                    break;
+                }
+                default:
+                {
+                    break;
+                }
             }
-            case 10:    //ptz /left, right 
+        }
+        else  //ptz control new MiDas version
+        {
+            switch(_cmd1)
             {
-                if(_cmd2 == 1492)
+                case 9:    //new midas ptz /up, down
                 {
-                    printf("ptz left right stop\n");
-                    ptz_port->write_ptz(&ptz_stop);
+                    if(_cmd2 < 1492 & _cmd2 != 0) 
+                    {
+                        printf("__up\n");
+                        ptz_port->write_ptz(&up);
+                        
+                        usleep(_cmd3*1000);
+
+                        printf("__stop\n");
+                        ptz_port->write_ptz(&ptz_stop);
+                    }
+                    else if(_cmd2 > 1492 & _cmd2 != 0) 
+                    {
+                        printf("__down\n");
+                        ptz_port->write_ptz(&down);
+                        
+                        usleep(_cmd3*1000);
+                        
+                        printf("__stop\n");
+                        ptz_port->write_ptz(&ptz_stop);
+                    }
+                    break;
                 }
-                else if(_cmd2 < 1492 & _cmd2 != 0) 
+                case 10:    //new midas ptz /left, right 
                 {
-                    printf("lefte\n");
-                    ptz_port->write_ptz(&left);
+                    if(_cmd2 < 1492 & _cmd2 != 0) 
+                    {
+                        printf("__lefte\n");
+                        ptz_port->write_ptz(&left);
+
+                        usleep(_cmd3*1000);
+
+                        printf("__stop\n");
+                        ptz_port->write_ptz(&ptz_stop);
+                    }
+                    else if(_cmd2 > 1492 & _cmd2 != 0) 
+                    {
+                        printf("__right\n");
+                        ptz_port->write_ptz(&right);
+
+                        usleep(_cmd3*1000);
+
+                        printf("__stop\n");
+                        ptz_port->write_ptz(&ptz_stop);
+                    }
+                    break;
                 }
-                else if(_cmd2 > 1492 & _cmd2 != 0) 
+                case 11:    //new midas ptz zoom /in, out
                 {
-                    printf("right\n");
-                    ptz_port->write_ptz(&right);
+                    if(_cmd2 < 1492 & _cmd2 != 0)
+                    {
+                        printf("__zoom in\n");
+                        ptz_port->write_ptz(&cam_in);
+
+                        usleep(_cmd3*1000);
+
+                        printf("__zoom stop\n");
+                        ptz_port->write_ptz(&cam_stop);
+                    }
+                    else if(_cmd2 > 1492 & _cmd2 != 0)
+                    {
+                        printf("__zoom out\n");
+                        ptz_port->write_ptz(&cam_out);
+
+                        usleep(_cmd3*1000);
+
+                        printf("__zoom stop\n");
+                        ptz_port->write_ptz(&cam_stop);
+                    }
+                    break;
                 }
-                break;
-            }
-            case 11:    //ptz zoom /in, out
-            {
-                if(_cmd2 == 1492)
+                default:
                 {
-                    printf("ptz zoom in out stop\n");
-                    ptz_port->write_ptz(&cam_stop);
+                    break;
                 }
-                else if(_cmd2 < 1492 & _cmd2 != 0)
-                {
-                    printf("zoom in\n");
-                    ptz_port->write_ptz(&cam_in);
-                }
-                else if(_cmd2 > 1492 & _cmd2 != 0)
-                {
-                    printf("zoom out\n");
-                    ptz_port->write_ptz(&cam_out);
-                }
-                break;
-            }
-            case 21:    //camera power /on, off  ///////////////////////////bec controll
-            {
-                if(_cmd2 == 11) // on
-                {
-                    *pm_cmd = 1;
-                }
-                else if(_cmd2 == 10) // off
-                {
-                    *pm_cmd = 2;
-                }
-                break;
-            }
-            case 22:    //camera screen /on, off
-            {
-                if(_cmd2 == 11)
-                {
-                    printf("cam screen on\n");
-                    ptz_port->write_ptz(&power_on);
-                }
-                else if(_cmd2 == 10)
-                {
-                    printf("cam screen off\n");
-                    ptz_port->write_ptz(&power_off);
-                }
-                break;
-            }
-            case 23:    //set position init
-            {
-                if(_cmd2 == 11)
-                {
-                    printf("ptz set position init\n");
-                    ptz_port->write_ptz(&cam_reset);
-                }
-                break;
-            }
-            case 24:    //tracking /on, off, cross
-            {
-                if(_cmd2 == 11)
-                {
-                    printf("tk on\n");
-                    ptz_port->write_ptz(&tk_on);
-                }
-                else if(_cmd2 == 10)
-                {
-                    printf("tk off\n");
-                    ptz_port->write_ptz(&tk_off);
-                }
-                else if(_cmd2 == 12)
-                {
-                    printf("tk cross\n");
-                    ptz_port->write_ptz(&tk_cross);
-                }
-                break;
-            }
-            case 25:    //screen /optical, ir, ir'optical, optical'ir
-            {
-                if(_cmd2 == 11)
-                {
-                    printf("optical (IR)\n");
-                    ptz_port->write_ptz(&op_ir);
-                }
-                else if(_cmd2 == 12)
-                {
-                    printf("IR (optical)\n");
-                    ptz_port->write_ptz(&ir_op);
-                }
-                else if(_cmd2 == 13)
-                {
-                    printf("optical\n");
-                    ptz_port->write_ptz(&op);
-                }
-                else if(_cmd2 == 14)
-                {
-                    printf("IR\n");
-                    ptz_port->write_ptz(&ir);
-                }
-                break;
-            }
-            case 26:    //LED /on, off    ////////////////////////////////bec controll
-            {
-                if(_cmd2 == 11)  //on
-                {
-                    *pm_cmd = 3;
-                }
-                else if(_cmd2 == 10) //off
-                {
-                    *pm_cmd = 4;
-                }
-                break;
-            }
-            default:
-            {
-                break;
             }
         }
     }
@@ -1153,15 +1250,15 @@ int main(void)
 	//kcmvp_port->start();     
 
     // uart config FC
-	fc_port = new Serial_Port("/dev/ttyTHS1", 57600);  //"/dev/ttyTHS1"
+	fc_port = new Serial_Port("/dev/1", 57600);  //"/dev/ttyTHS1"
 	int fc = fc_port->start();      
     
     // uart config ptz
     ptz_port = new Serial_Port("/dev/2", 115200);
     int ptz = ptz_port->start();  
 
-    pz10t_port = new Serial_Port("/dev/1", 115200);
-    int pz10t = pz10t_port->start();      
+    //pz10t_port = new Serial_Port("/dev/1", 115200);
+    //int pz10t = pz10t_port->start();      
 
     // current sener init
     current_port = new Serial_Port("/dev/3", 9600);     
@@ -1172,7 +1269,7 @@ int main(void)
     //ads1115_i2c_init(&a1_fd, &a2_fd, &b1_fd, &b2_fd);
     //int ads1115 = write_1115_i2c_word_data(a1_fd, 0x01, 0x00); //test i2c connect
     
-    fprintf(stderr, "\nkcmvp=%d  FC=%d  ptz=%d  pz10t=%d  current=%d\n", kcmvp, fc, ptz, pz10t, current);
+    fprintf(stderr, "\nkcmvp=%d  FC=%d  ptz=%d  current=%d\n", kcmvp, fc, ptz, current);
 
     int pipe_fd[2];
     pipe(pipe_fd);      //pipe create
@@ -1199,7 +1296,7 @@ int main(void)
         }*/
         //else if(kcmvp==0&fc==0&ptz==0&pz10t==-1&current==0&ads1115==-1)
         //{
-            fprintf(stderr,"open_w_drone_tx_20210107\n");
+            fprintf(stderr,"open_w_drone_tx_20210818\n");
             uint16_t pack_v = 0;
 
             //thread start
@@ -1277,15 +1374,16 @@ int main(void)
         }*/
         //else if(kcmvp==0&fc==0&ptz==0&pz10t==-1&current==0&ads1115==-1)
         //{
-            fprintf(stderr,"open_w_drone_rx_20210107\n");
+            fprintf(stderr,"open_w_drone_rx_20210818\n");
             float cmd1 = 0.0;           //ptz controll
             float cmd2 = 0.0;
+            float cmd3 = 0.0;
             int pm_cmd = 0;             //pm controll
 
             //thread start
-            std::thread th6(&gcs_fc_thread, &cmd1, &cmd2);
+            std::thread th6(&gcs_fc_thread, &cmd1, &cmd2, &cmd3);
             std::thread th11(&w_IO_port_thread, pipe_fd, &pm_cmd);     ////////////////// SSR active
-            std::thread th8(&ptz_thread, &cmd1, &cmd2, &pm_cmd);
+            std::thread th8(&ptz_thread, &cmd1, &cmd2, &cmd3, &pm_cmd);
             //std::thread th10(&pz10t_thread, &cmd1, &cmd2, &pm_cmd);
 
             th6.join();
